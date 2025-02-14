@@ -1,9 +1,13 @@
 name: Build Space Invaders with Pygbag
+
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-pygbag:
@@ -11,18 +15,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Checkout
-      run: |
-            echo "Attempting to install pygbag"
-            python -m pip install pygbag
-            echo "Successfully installed pygbag"
-            echo "Attempting to build the game"
-            python -m pygbag --build $GITHUB_WORKSPACE/space_invaders/main.py
-            echo "Successfully build the game and complied to WebAssembly"
+      - uses: actions/checkout@v2
 
-    - name : "Upload to GitHub pages branch gh-pages"
-      uses: JamesIves/github-pages-deploy-action@4.1.7
-      with:
-        branch: gh-pages
-        folder: space_invaders/build/web
+      - name: Install pygbag and Build the Game
+        run: |
+          echo "Attempting to install pygbag"
+          python -m pip install pygbag
+          echo "Successfully installed pygbag"
+          echo "Attempting to build the game"
+          python -m pygbag --build $GITHUB_WORKSPACE/space_invaders/main.py
+          echo "Successfully built the game and compiled to WebAssembly"
+
+      - name: Upload to GitHub Pages Branch gh-pages
+        uses: JamesIves/github-pages-deploy-action@4.1.7
+        with:
+          branch: gh-pages
+          folder: space_invaders/build/web
+          # Uncomment the following line and set it appropriately if you want to use a personal access token.
+          # token: ${{ secrets.DEPLOY_TOKEN }}
