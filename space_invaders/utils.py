@@ -2,7 +2,6 @@ from pygame import sprite, transform, mixer, time, Surface, font, K_RIGHT, K_LEF
 from constants import IMAGES, ENEMY_MOVE_DOWN, SOUND_PATH, FONT, WHITE
 from random import choice
 
-
 class Ship(sprite.Sprite):
     def __init__(self, game):
         sprite.Sprite.__init__(self)
