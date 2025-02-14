@@ -1,732 +1,646 @@
-from pygame import (
-    sprite,
-    transform,
-    mixer,
-    time,
-    Surface,
-    font,
-    K_RIGHT,
-    K_LEFT,
-    display,
-    image,
-    image,
-    sprite,
-    transform,
-    event,
-    mixer,
-    time,
-    KEYUP,
-    KEYDOWN,
-    K_ESCAPE,
-    K_SPACE,
-    QUIT,
-    init,
-    key,
-)
+import pygame
 import sys
-from os.path import abspath, dirname
-from random import choice
-import asyncio
+import random
+from collections import deque
 
-BASE_PATH = abspath(dirname(__file__))
-FONT_PATH = BASE_PATH + "/fonts/"
-IMAGE_PATH = BASE_PATH + "/images/"
-SOUND_PATH = BASE_PATH + "/sounds/"
-SOUND_FORMAT = "ogg"
+# Configuration constants
+CELL_SIZE = 80               # size of each cell in pixels
+SIDEBAR_WIDTH = 300          # width of the terminal sidebar
 
+# Grid difficulty settings
+INITIAL_GRID_SIZE = 3
+MAX_GRID_SIZE = 8
+GRID_INCREASE_INTERVAL = 2   # increase grid size every 2 phases
 
-# Colors (R, G, B)
-WHITE = (255, 255, 255)
-GREEN = (78, 255, 87)
-YELLOW = (241, 255, 0)
-BLUE = (80, 255, 239)
-PURPLE = (203, 0, 255)
-RED = (237, 28, 36)
+BASE_LEVEL_TIME = 60000      # base time per phase in ms
+LEVEL_TIME_REDUCTION = 5000  # ms reduced per phase
+MIN_LEVEL_TIME = 30000       # minimum time per phase in ms
+LEVEL_COMPLETE_DELAY = 2000  # delay after phase completion in ms
 
-SCREEN = display.set_mode((800, 600))
-FONT = FONT_PATH + "space_invaders.ttf"
-IMG_NAMES = [
-    "ship",
-    "mystery",
-    "enemy1_1",
-    "enemy1_2",
-    "enemy2_1",
-    "enemy2_2",
-    "enemy3_1",
-    "enemy3_2",
-    "explosionblue",
-    "explosiongreen",
-    "explosionpurple",
-    "laser",
-    "enemylaser",
-]
-IMAGES = {
-    name: image.load(IMAGE_PATH + "{}.png".format(name)).convert_alpha()
-    for name in IMG_NAMES
-}
+# UI Bar settings
+LARGE_UI_BAR_HEIGHT = 60
+SMALL_UI_BAR_HEIGHT = 80    # total height for two rows in small grids
 
-BLOCKERS_POSITION = 450
-ENEMY_DEFAULT_POSITION = 65  # Initial value for a new game
-ENEMY_MOVE_DOWN = 35
-DIFFICULTY_LEVEL = 5  # a value between 1 to 10 - number of enemy bullets
+# Auto-solved chance for a puzzle at the start (e.g., 5%)
+AUTO_SOLVED_CHANCE = 0.05
 
+# Colors (neon & futuristic aesthetics)
+BACKGROUND_COLOR = (10, 10, 10)
+GRID_BG_COLOR = (20, 20, 20)
+CELL_COLOR = (30, 30, 30)
+LINE_COLOR = (57, 255, 20)          # bright neon green for lines
+UI_BAR_COLOR = (15, 15, 15)
+HIGHLIGHT_COLOR = (255, 215, 0)       # yellow glow for a hacked network
+HINT_HIGHLIGHT_COLOR = (0, 255, 0)    # green highlight for the hint path
+UI_TEXT_COLOR = (57, 255, 20)
+ENTRANCE_NODE_COLOR = (0, 200, 200)
+EXIT_NODE_COLOR = (200, 50, 50)
+SIDEBAR_BG_COLOR = (5, 5, 5)
+SIDEBAR_TEXT_COLOR = (57, 255, 20)
+POPUP_BG_COLOR = (20, 20, 20)
+POPUP_BORDER_COLOR = (57, 255, 20)
 
-class Ship(sprite.Sprite):
-    def __init__(self):
-        sprite.Sprite.__init__(self)
-        self.image = IMAGES["ship"]
-        self.rect = self.image.get_rect(topleft=(375, 540))
-        self.speed = 5
+# Directions: 0:Up, 1:Right, 2:Down, 3:Left.
+DIRECTIONS = {0: (0, -1), 1: (1, 0), 2: (0, 1), 3: (-1, 0)}
+REVERSE_DIR = {0: 2, 1: 3, 2: 0, 3: 1}
 
-    def update(self, keys, *args):
-        if keys[K_LEFT] and self.rect.x > 10:
-            self.rect.x -= self.speed
-        if keys[K_RIGHT] and self.rect.x < 740:
-            self.rect.x += self.speed
-        game.screen.blit(self.image, self.rect)
+# Terminal Sidebar settings
+TERMINAL_FONT_SIZE = 18
+TERMINAL_MAX_LINES = 20
+TERMINAL_UPDATE_INTERVAL = 500  # milliseconds
 
+# Global terminal variables
+terminal_messages = []
+last_terminal_update = 0
 
-class Bullet(sprite.Sprite):
-    def __init__(self, xpos, ypos, direction, speed, filename, side):
-        sprite.Sprite.__init__(self)
-        self.image = IMAGES[filename]
-        self.rect = self.image.get_rect(topleft=(xpos, ypos))
-        self.speed = speed
-        self.direction = direction
-        self.side = side
-        self.filename = filename
+# Global hint-related variables
+hint_mode = False
+HINT_MODE_MAX_DURATION = 6000   # maximum duration for hint mode in ms
+HINT_EXTENSION_DELAY = 1000     # extra delay once pieces are in place
+hint_start_time = 0
+hint_last_update = 0            # track the last rotation update for hint mode
+solution_reached_time = None    # time when all solution nodes reached target
 
-    def update(self, keys, *args):
-        game.screen.blit(self.image, self.rect)
-        self.rect.y += self.speed * self.direction
-        if self.rect.y < 15 or self.rect.y > 600:
-            self.kill()
+# Optional: Uncomment to enable sound effects
+# pygame.mixer.init()
+# rotate_sound = pygame.mixer.Sound("rotate.wav")
+# success_sound = pygame.mixer.Sound("success.wav")
 
+class Cell:
+    def __init__(self, piece_type, orientation):
+        # piece_type: "line", "corner", "tshape", or "plus"
+        # orientation: one of 0, 90, 180, or 270 degrees
+        self.piece_type = piece_type
+        self.orientation = orientation
+        # target stores the solved orientation (used in hint mode)
+        self.target = orientation
 
-class Enemy(sprite.Sprite):
-    def __init__(self, row, column):
-        sprite.Sprite.__init__(self)
-        self.row = row
-        self.column = column
-        self.images = []
-        self.load_images()
-        self.index = 0
-        self.image = self.images[self.index]
-        self.rect = self.image.get_rect()
+    def rotate(self):
+        # For plus shaped nodes, rotation doesn't change connectivity.
+        if self.piece_type == "plus":
+            return
+        self.orientation = (self.orientation + 90) % 360
+        # Uncomment to play a rotation sound:
+        # rotate_sound.play()
 
-    def toggle_image(self):
-        self.index += 1
-        if self.index >= len(self.images):
-            self.index = 0
-        self.image = self.images[self.index]
+    def get_connections(self):
+        if self.piece_type == "line":
+            return [0, 2] if self.orientation % 180 == 0 else [1, 3]
+        elif self.piece_type == "corner":
+            if self.orientation == 0:
+                return [0, 1]
+            elif self.orientation == 90:
+                return [1, 2]
+            elif self.orientation == 180:
+                return [2, 3]
+            elif self.orientation == 270:
+                return [3, 0]
+        elif self.piece_type == "tshape":
+            # T-shaped piece: three connections, missing one
+            if self.orientation == 0:    # missing down
+                return [0, 1, 3]
+            elif self.orientation == 90:   # missing left
+                return [0, 1, 2]
+            elif self.orientation == 180:  # missing up
+                return [1, 2, 3]
+            elif self.orientation == 270:  # missing right
+                return [0, 2, 3]
+        elif self.piece_type == "plus":
+            # Plus shaped piece: all four connections.
+            return [0, 1, 2, 3]
+        return []
 
-    def update(self, *args):
-        game.screen.blit(self.image, self.rect)
+def get_piece_for_connections(incoming, outgoing):
+    """
+    Returns a piece_type and orientation for a connection defined by the two required connection directions.
+    The order of incoming and outgoing does not matter.
+    Handles straight (opposite) connections with added variety: sometimes a line,
+    sometimes a T shaped piece with an extra connection.
+    For non-straight connections, returns a corner piece.
+    """
+    directions_set = {incoming, outgoing}
+    # Handle straight line cases, with variety.
+    if directions_set == {0, 2}:
+        # Vertical straight: choose between a line or a T shape that still has vertical connectivity.
+        if random.choice([True, False]):
+            return ("line", 0)
+        else:
+            return ("tshape", random.choice([90, 270]))
+    if directions_set == {1, 3}:
+        # Horizontal straight.
+        if random.choice([True, False]):
+            return ("line", 90)
+        else:
+            return ("tshape", random.choice([0, 180]))
+    # For one connection (if both are same) use a line piece.
+    if incoming == outgoing:
+        return ("line", 0) if incoming in [0, 2] else ("line", 90)
+    # Handle corners.
+    if directions_set == {0, 1}:
+        return ("corner", 0)
+    elif directions_set == {1, 2}:
+        return ("corner", 90)
+    elif directions_set == {2, 3}:
+        return ("corner", 180)
+    elif directions_set == {3, 0}:
+        return ("corner", 270)
+    return ("line", 0)
 
-    def load_images(self):
-        images = {
-            0: ["1_2", "1_1"],
-            1: ["2_2", "2_1"],
-            2: ["2_2", "2_1"],
-            3: ["3_1", "3_2"],
-            4: ["3_1", "3_2"],
-        }
-        img1, img2 = (IMAGES["enemy{}".format(img_num)] for img_num in images[self.row])
-        self.images.append(transform.scale(img1, (40, 35)))
-        self.images.append(transform.scale(img2, (40, 35)))
+def generate_solution_path(cols, rows):
+    """
+    Generates a random monotonic path from (0,0) to (cols-1, rows-1)
+    using only right ('R') and down ('D') moves.
+    """
+    rights_needed = cols - 1
+    downs_needed = rows - 1
+    moves = ['R'] * rights_needed + ['D'] * downs_needed
+    random.shuffle(moves)
+    path = [(0, 0)]
+    x, y = 0, 0
+    for move in moves:
+        if move == 'R':
+            x += 1
+        elif move == 'D':
+            y += 1
+        path.append((x, y))
+    return path
 
+def create_board(grid_size):
+    """
+    Creates a board (grid_size x grid_size) with a guaranteed solution path.
+    The solution path nodes are built with matching connection directions and may
+    occasionally incorporate a plus node for added hacker flair.
+    After building the board, we scramble the solution path nodes so the phase doesn't start solved.
+    Returns:
+      - board: a 2D list of Cell objects.
+      - solution_path: list of (x,y) tuples representing the solution path.
+    """
+    board = [[None for _ in range(grid_size)] for _ in range(grid_size)]
+    solution_path = generate_solution_path(grid_size, grid_size)
 
-class EnemiesGroup(sprite.Group):
-    def __init__(self, columns, rows):
-        sprite.Group.__init__(self)
-        self.enemies = [[None] * columns for _ in range(rows)]
-        self.columns = columns
-        self.rows = rows
-        self.leftAddMove = 0
-        self.rightAddMove = 0
-        self.moveTime = 600
-        self.direction = 1
-        self.rightMoves = 30
-        self.leftMoves = 30
-        self.moveNumber = 15
-        self.timer = time.get_ticks()
-        self.bottom = game.enemyPosition + ((rows - 1) * 45) + 35
-        self._aliveColumns = list(range(columns))
-        self._leftAliveColumn = 0
-        self._rightAliveColumn = columns - 1
-
-    def update(self, current_time):
-        if current_time - self.timer > self.moveTime:
-            if self.direction == 1:
-                max_move = self.rightMoves + self.rightAddMove
+    # Build solution path nodes with proper connectivity.
+    for i, (x, y) in enumerate(solution_path):
+        # Increase rarity of plus nodes in the solution: only 10% chance.
+        use_plus = random.random() < 0.1
+        if use_plus:
+            piece_type = "plus"
+            solved_orientation = 0  # Orientation is irrelevant for plus pieces.
+        else:
+            if i == 0:
+                # First node: only an outgoing connection.
+                next_x, next_y = solution_path[i + 1]
+                dx, dy = next_x - x, next_y - y
+                for d, (ddx, ddy) in DIRECTIONS.items():
+                    if ddx == dx and ddy == dy:
+                        out_dir = d
+                        break
+                solved_orientation = 0 if out_dir in [0, 2] else 90
+                piece_type = "line"
+            elif i == len(solution_path) - 1:
+                # Last node: only an incoming connection.
+                prev_x, prev_y = solution_path[i - 1]
+                dx, dy = x - prev_x, y - prev_y
+                for d, (ddx, ddy) in DIRECTIONS.items():
+                    if ddx == dx and ddy == dy:
+                        prev_move = d
+                        break
+                incoming = REVERSE_DIR[prev_move]
+                solved_orientation = 0 if incoming in [0, 2] else 90
+                piece_type = "line"
             else:
-                max_move = self.leftMoves + self.leftAddMove
+                # Intermediate node: gets an incoming connection from the previous node
+                # and an outgoing connection towards the next node.
+                prev_x, prev_y = solution_path[i - 1]
+                next_x, next_y = solution_path[i + 1]
+                dx_in, dy_in = x - prev_x, y - prev_y
+                for d, (ddx, ddy) in DIRECTIONS.items():
+                    if ddx == dx_in and ddy == dy_in:
+                        incoming = REVERSE_DIR[d]
+                        break
+                dx_out, dy_out = next_x - x, next_y - y
+                for d, (ddx, ddy) in DIRECTIONS.items():
+                    if ddx == dx_out and ddy == dy_out:
+                        out_dir = d
+                        break
+                piece_type, solved_orientation = get_piece_for_connections(incoming, out_dir)
+        cell = Cell(piece_type, solved_orientation)
+        cell.target = solved_orientation  # record the solved orientation
+        board[y][x] = cell
 
-            if self.moveNumber >= max_move:
-                self.leftMoves = 30 + self.rightAddMove
-                self.rightMoves = 30 + self.leftAddMove
-                self.direction *= -1
-                self.moveNumber = 0
-                self.bottom = 0
-                for enemy in self:
-                    enemy.rect.y += ENEMY_MOVE_DOWN
-                    enemy.toggle_image()
-                    if self.bottom < enemy.rect.y + 35:
-                        self.bottom = enemy.rect.y + 35
-            else:
-                velocity = 10 if self.direction == 1 else -10
-                for enemy in self:
-                    enemy.rect.x += velocity
-                    enemy.toggle_image()
-                self.moveNumber += 1
+    # Fill in the remaining board nodes with random pieces.
+    # Increase rarity of plus pieces here using weights: line 40, corner 30, tshape 30, plus 5.
+    for y in range(grid_size):
+        for x in range(grid_size):
+            if board[y][x] is None:
+                piece_type = random.choices(
+                    ["line", "corner", "tshape", "plus"],
+                    weights=[40, 30, 30, 5]
+                )[0]
+                orientation = random.choice([0, 90, 180, 270])
+                board[y][x] = Cell(piece_type, orientation)
+    
+    # --- Scramble the solution path nodes ---
+    # Prevent the game from starting with a solved path by rotating each
+    # solution node to a random orientation that is not the solved one.
+    for (x, y) in solution_path:
+        cell = board[y][x]
+        # Only scramble pieces that are not plus, as plus nodes remain constant.
+        if cell.piece_type == "plus":
+            continue
+        possible_orientations = [0, 90, 180, 270]
+        if cell.target in possible_orientations:
+            possible_orientations.remove(cell.target)
+        cell.orientation = random.choice(possible_orientations)
 
-            self.timer += self.moveTime
+    return board, solution_path
 
-    def add_internal(self, *sprites):
-        super(EnemiesGroup, self).add_internal(*sprites)
-        for s in sprites:
-            self.enemies[s.row][s.column] = s
+def draw_cell(screen, cell, x, y, top_ui_height):
+    """
+    Draws a node and its connection lines at grid coordinate (x, y).
+    """
+    cell_x = x * CELL_SIZE
+    cell_y = y * CELL_SIZE + top_ui_height
+    rect = pygame.Rect(cell_x, cell_y, CELL_SIZE, CELL_SIZE)
+    pygame.draw.rect(screen, CELL_COLOR, rect)
+    pygame.draw.rect(screen, BACKGROUND_COLOR, rect, 1)
+    
+    cx = cell_x + CELL_SIZE // 2
+    cy = cell_y + CELL_SIZE // 2
+    for direction in cell.get_connections():
+        dx, dy = DIRECTIONS[direction]
+        end_x = cx + (CELL_SIZE // 2 - 10) * dx
+        end_y = cy + (CELL_SIZE // 2 - 10) * dy
+        pygame.draw.line(screen, LINE_COLOR, (cx, cy), (end_x, end_y), 8)
 
-    def remove_internal(self, *sprites):
-        super(EnemiesGroup, self).remove_internal(*sprites)
-        for s in sprites:
-            self.kill(s)
-        self.update_speed()
+def draw_highlighted_lines(screen, cell, x, y, top_ui_height, color):
+    """
+    Draws the node's connection lines in a highlight color.
+    """
+    cell_x = x * CELL_SIZE
+    cell_y = y * CELL_SIZE + top_ui_height
+    cx = cell_x + CELL_SIZE // 2
+    cy = cell_y + CELL_SIZE // 2
+    for direction in cell.get_connections():
+        dx, dy = DIRECTIONS[direction]
+        end_x = cx + (CELL_SIZE // 2 - 10) * dx
+        end_y = cy + (CELL_SIZE // 2 - 10) * dy
+        pygame.draw.line(screen, color, (cx, cy), (end_x, end_y), 8)
 
-    def is_column_dead(self, column):
-        return not any(self.enemies[row][column] for row in range(self.rows))
+def draw_endpoint_box(screen, x, y, top_ui_height, color):
+    """
+    Draws a box around a node to indicate an endpoint.
+    """
+    cell_x = x * CELL_SIZE
+    cell_y = y * CELL_SIZE + top_ui_height
+    rect = pygame.Rect(cell_x + 5, cell_y + 5, CELL_SIZE - 10, CELL_SIZE - 10)
+    pygame.draw.rect(screen, color, rect, 3)
 
-    def random_bottom(self):
-        col = choice(self._aliveColumns)
-        col_enemies = (self.enemies[row - 1][col] for row in range(self.rows, 0, -1))
-        return next((en for en in col_enemies if en is not None), None)
+def draw_ui_bar(screen, level, points, time_left, game_width, top_ui_height):
+    """
+    Draws a single UI bar at the top.
+    """
+    ui_rect = pygame.Rect(0, 0, game_width, top_ui_height)
+    pygame.draw.rect(screen, UI_BAR_COLOR, ui_rect)
+    font = pygame.font.SysFont(None, 30)
+    section_width = game_width // 3
+    # Hacker-themed terminology.
+    phase_text = font.render(f"Phase: {level}", True, UI_TEXT_COLOR)
+    credits_text = font.render(f"Credits: {points}", True, UI_TEXT_COLOR)
+    countdown_text = font.render(f"Countdown: {int(time_left/1000)}s", True, UI_TEXT_COLOR)
+    screen.blit(phase_text, (10, 10))
+    screen.blit(credits_text, (section_width + 10, 10))
+    screen.blit(countdown_text, (2 * section_width + 10, 10))
 
-    def update_speed(self):
-        if len(self) == 1:
-            self.moveTime = 200
-        elif len(self) <= 10:
-            self.moveTime = 400
+def draw_ui_double_bar(screen, level, points, time_left, game_width, total_ui_height):
+    """
+    Draws two UI bar rows for small grids.
+    """
+    row_height = total_ui_height // 2
+    ui_rect1 = pygame.Rect(0, 0, game_width, row_height)
+    pygame.draw.rect(screen, UI_BAR_COLOR, ui_rect1)
+    ui_rect2 = pygame.Rect(0, row_height, game_width, row_height)
+    pygame.draw.rect(screen, UI_BAR_COLOR, ui_rect2)
+    font = pygame.font.SysFont(None, 24)
+    phase_text = font.render(f"Phase: {level}", True, UI_TEXT_COLOR)
+    credits_text = font.render(f"Credits: {points}", True, UI_TEXT_COLOR)
+    screen.blit(phase_text, (10, 5))
+    screen.blit(credits_text, (game_width // 2, 5))
+    countdown_text = font.render(f"Countdown: {int(time_left/1000)}s", True, UI_TEXT_COLOR)
+    screen.blit(countdown_text, (10, row_height + 5))
 
-    def kill(self, enemy):
-        self.enemies[enemy.row][enemy.column] = None
-        is_column_dead = self.is_column_dead(enemy.column)
-        if is_column_dead:
-            self._aliveColumns.remove(enemy.column)
+def draw_glitch_effect(screen, width, height):
+    """
+    Draws a neon glitch effect overlaying the UI bar.
+    """
+    glitch_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+    for _ in range(10):
+        x = random.randint(0, width)
+        y = random.randint(0, height)
+        glitch_width = random.randint(20, 50)
+        glitch_height = random.randint(2, 6)
+        color = (random.randint(50, 100), random.randint(200, 255), random.randint(50, 100), 100)
+        pygame.draw.rect(glitch_surface, color, (x, y, glitch_width, glitch_height))
+    screen.blit(glitch_surface, (0, 0))
 
-        if enemy.column == self._rightAliveColumn:
-            while self._rightAliveColumn > 0 and is_column_dead:
-                self._rightAliveColumn -= 1
-                self.rightAddMove += 5
-                is_column_dead = self.is_column_dead(self._rightAliveColumn)
+def update_terminal_messages():
+    """
+    Updates terminal messages with random cryptic output.
+    """
+    global terminal_messages, last_terminal_update
+    current_time = pygame.time.get_ticks()
+    if current_time - last_terminal_update > TERMINAL_UPDATE_INTERVAL:
+        new_msg = generate_random_terminal_message()
+        terminal_messages.append(new_msg)
+        if len(terminal_messages) > TERMINAL_MAX_LINES:
+            terminal_messages.pop(0)
+        last_terminal_update = current_time
 
-        elif enemy.column == self._leftAliveColumn:
-            while self._leftAliveColumn < self.columns and is_column_dead:
-                self._leftAliveColumn += 1
-                self.leftAddMove += 5
-                is_column_dead = self.is_column_dead(self._leftAliveColumn)
+def generate_random_terminal_message():
+    """
+    Generates a random terminal-style log message.
+    """
+    prefixes = ["DEBUG", "TRACE", "INFO", "WARN", "ERR"]
+    messages = [
+        "Accessing matrix node 0x{:04X}".format(random.randint(0, 0xFFFF)),
+        "Initializing cyber protocol layer {}...".format(random.randint(1, 5)),
+        "Packet intercepted: {} bytes".format(random.randint(50, 500)),
+        "Infiltration sequence {} activated".format(random.choice(["A", "B", "C", "D"])),
+        "Decrypting security node 0x{:03X}".format(random.randint(0, 0xFFF)),
+        "System vulnerability detected!",
+        "Bypassing firewall...{}%".format(random.randint(0, 100))
+    ]
+    return "[{}] {}".format(random.choice(prefixes), random.choice(messages))
 
+def draw_terminal_sidebar(screen, sidebar_rect):
+    """
+    Draws the terminal sidebar with cryptic messages.
+    """
+    pygame.draw.rect(screen, SIDEBAR_BG_COLOR, sidebar_rect)
+    font = pygame.font.SysFont("Courier", TERMINAL_FONT_SIZE)
+    line_height = TERMINAL_FONT_SIZE + 4
+    y_offset = sidebar_rect.y + 10
+    for msg in terminal_messages:
+        text = font.render(msg, True, SIDEBAR_TEXT_COLOR)
+        screen.blit(text, (sidebar_rect.x + 10, y_offset))
+        y_offset += line_height
 
-class Blocker(sprite.Sprite):
-    def __init__(self, size, color, row, column):
-        sprite.Sprite.__init__(self)
-        self.height = size
-        self.width = size
-        self.color = color
-        self.image = Surface((self.width, self.height))
-        self.image.fill(self.color)
-        self.rect = self.image.get_rect()
-        self.row = row
-        self.column = column
+def draw_popup_notification(screen, message, game_width, screen_height):
+    """
+    Draws a retro pop-up notification window emulating an old computer style.
+    The message is split into two lines.
+    """
+    # Determine popup dimensions based on game area
+    popup_width = int(game_width * 0.8)
+    popup_height = 80
+    popup_x = (game_width - popup_width) // 2
+    popup_y = (screen_height - popup_height) // 2
 
-    def update(self, keys, *args):
-        game.screen.blit(self.image, self.rect)
+    # Draw popup background and border
+    popup_rect = pygame.Rect(popup_x, popup_y, popup_width, popup_height)
+    pygame.draw.rect(screen, POPUP_BG_COLOR, popup_rect)
+    pygame.draw.rect(screen, POPUP_BORDER_COLOR, popup_rect, 3)
 
+    # Adjust font size based on available popup width.
+    font_size = 20 if game_width >= 400 else 16
+    font = pygame.font.SysFont("Courier", font_size)
 
-class Mystery(sprite.Sprite):
-    def __init__(self):
-        sprite.Sprite.__init__(self)
-        self.image = IMAGES["mystery"]
-        self.image = transform.scale(self.image, (75, 35))
-        self.rect = self.image.get_rect(topleft=(-80, 45))
-        self.row = 5
-        self.moveTime = 25000
-        self.direction = 1
-        self.timer = time.get_ticks()
-        self.mysteryEntered = mixer.Sound(SOUND_PATH + f"mysteryentered.{SOUND_FORMAT}")
-        self.mysteryEntered.set_volume(0.3)
-        self.playSound = True
+    # Split the message into two lines if not already split
+    if "\n" in message:
+        lines = message.split("\n")
+    else:
+        # For messages without a newline, split roughly in half
+        mid = len(message) // 2
+        split_index = message.rfind(" ", 0, mid)
+        if split_index == -1:
+            split_index = mid
+        lines = [message[:split_index], message[split_index:].lstrip()]
 
-    def update(self, keys, currentTime, *args):
-        resetTimer = False
-        passed = currentTime - self.timer
-        if passed > self.moveTime:
-            if (self.rect.x < 0 or self.rect.x > 800) and self.playSound:
-                self.mysteryEntered.play()
-                self.playSound = False
-            if self.rect.x < 840 and self.direction == 1:
-                self.mysteryEntered.fadeout(4000)
-                self.rect.x += 2
-                game.screen.blit(self.image, self.rect)
-            if self.rect.x > -100 and self.direction == -1:
-                self.mysteryEntered.fadeout(4000)
-                self.rect.x -= 2
-                game.screen.blit(self.image, self.rect)
+    # Render each line and position them
+    rendered_lines = [font.render(line, True, LINE_COLOR) for line in lines]
+    total_height = sum(line.get_height() for line in rendered_lines)
+    current_y = popup_rect.y + (popup_height - total_height) // 2
 
-        if self.rect.x > 830:
-            self.playSound = True
-            self.direction = -1
-            resetTimer = True
-        if self.rect.x < -90:
-            self.playSound = True
-            self.direction = 1
-            resetTimer = True
-        if passed > self.moveTime and resetTimer:
-            self.timer = currentTime
+    for line in rendered_lines:
+        text_rect = line.get_rect(centerx=popup_rect.centerx, y=current_y)
+        screen.blit(line, text_rect)
+        current_y += line.get_height()
 
+def find_connection_path(board):
+    """
+    Uses DFS to find a valid path from the entrance (0,0) to the exit node.
+    Returns the path as a list of (x, y) tuples if found; otherwise, None.
+    """
+    grid_size = len(board)
+    visited = set()
+    parent = {}
 
-class EnemyExplosion(sprite.Sprite):
-    def __init__(self, enemy, *groups):
-        super(EnemyExplosion, self).__init__(*groups)
-        self.image = transform.scale(self.get_image(enemy.row), (40, 35))
-        self.image2 = transform.scale(self.get_image(enemy.row), (50, 45))
-        self.rect = self.image.get_rect(topleft=(enemy.rect.x, enemy.rect.y))
-        self.timer = time.get_ticks()
+    def dfs(x, y):
+        if (x, y) == (grid_size - 1, grid_size - 1):
+            return True
+        visited.add((x, y))
+        for d in board[y][x].get_connections():
+            dx, dy = DIRECTIONS[d]
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < grid_size and 0 <= ny < grid_size:
+                neighbor = board[ny][nx]
+                if REVERSE_DIR[d] in neighbor.get_connections() and (nx, ny) not in visited:
+                    parent[(nx, ny)] = (x, y)
+                    if dfs(nx, ny):
+                        return True
+        return False
 
-    @staticmethod
-    def get_image(row):
-        img_colors = ["purple", "blue", "blue", "green", "green"]
-        return IMAGES["explosion{}".format(img_colors[row])]
+    if dfs(0, 0):
+        path = []
+        cur = (grid_size - 1, grid_size - 1)
+        while cur != (0, 0):
+            path.append(cur)
+            cur = parent[cur]
+        path.append((0, 0))
+        path.reverse()
+        return path
+    return None
 
-    def update(self, current_time, *args):
-        passed = current_time - self.timer
-        if passed <= 100:
-            game.screen.blit(self.image, self.rect)
-        elif passed <= 200:
-            game.screen.blit(self.image2, (self.rect.x - 6, self.rect.y - 6))
-        elif 400 < passed:
-            self.kill()
+def get_level_time(level):
+    """Calculates the allowed time for a phase."""
+    time_allowed = BASE_LEVEL_TIME - (level - 1) * LEVEL_TIME_REDUCTION
+    return max(time_allowed, MIN_LEVEL_TIME)
 
+def get_grid_size_for_level(level):
+    """Determines grid size based on the current phase."""
+    additional = (level - 1) // GRID_INCREASE_INTERVAL
+    return min(MAX_GRID_SIZE, INITIAL_GRID_SIZE + additional)
 
-class MysteryExplosion(sprite.Sprite):
-    def __init__(self, mystery, score, *groups):
-        super(MysteryExplosion, self).__init__(*groups)
-        self.text = Text(
-            FONT, 20, str(score), WHITE, mystery.rect.x + 20, mystery.rect.y + 6
-        )
-        self.timer = time.get_ticks()
+def main():
+    global hint_mode, hint_start_time, hint_last_update, solution_reached_time
+    pygame.init()
+    global terminal_messages, last_terminal_update
+    terminal_messages = []
+    last_terminal_update = pygame.time.get_ticks()
+    
+    level = 1
+    points = 0
+    state = "playing"  # states: playing, hacked, timeout
+    
+    grid_size = get_grid_size_for_level(level)
+    current_level_time = get_level_time(level)
+    top_ui_height = SMALL_UI_BAR_HEIGHT if grid_size < 5 else LARGE_UI_BAR_HEIGHT
 
-    def update(self, current_time, *args):
-        passed = current_time - self.timer
-        if passed <= 200 or 400 < passed <= 600:
-            self.text.draw(game.screen)
-        elif 600 < passed:
-            self.kill()
+    board, solution_path = create_board(grid_size)
+    # Occasionally start with a solved puzzle.
+    if random.random() < AUTO_SOLVED_CHANCE:
+        for (x, y) in solution_path:
+            board[y][x].orientation = board[y][x].target
 
+    game_width = grid_size * CELL_SIZE
+    screen_width = game_width + SIDEBAR_WIDTH
+    screen_height = grid_size * CELL_SIZE + top_ui_height
+    screen = pygame.display.set_mode((screen_width, screen_height))
+    pygame.display.set_caption("Neon Network Breach")
 
-class ShipExplosion(sprite.Sprite):
-    def __init__(self, ship, *groups):
-        super(ShipExplosion, self).__init__(*groups)
-        self.image = IMAGES["ship"]
-        self.rect = self.image.get_rect(topleft=(ship.rect.x, ship.rect.y))
-        self.timer = time.get_ticks()
+    level_start_time = pygame.time.get_ticks()
+    clock = pygame.time.Clock()
+    timeout_start = 0
 
-    def update(self, current_time, *args):
-        passed = current_time - self.timer
-        if 300 < passed <= 600:
-            game.screen.blit(self.image, self.rect)
-        elif 900 < passed:
-            self.kill()
+    # Rotation interval for hint mode (in ms)
+    rotation_interval = 1000
 
-
-class Life(sprite.Sprite):
-    def __init__(self, xpos, ypos):
-        sprite.Sprite.__init__(self)
-        self.image = IMAGES["ship"]
-        self.image = transform.scale(self.image, (23, 23))
-        self.rect = self.image.get_rect(topleft=(xpos, ypos))
-
-    def update(self, *args):
-        game.screen.blit(self.image, self.rect)
-
-
-class Text(object):
-    def __init__(self, textFont, size, message, color, xpos, ypos):
-        self.font = font.Font(textFont, size)
-        self.surface = self.font.render(message, True, color)
-        self.rect = self.surface.get_rect(topleft=(xpos, ypos))
-
-    def draw(self, surface):
-        surface.blit(self.surface, self.rect)
-
-
-class SpaceInvaders(object):
-    def __init__(self):
-        # It seems, in Linux buffersize=512 is not enough, use 4096 to prevent:
-        #   ALSA lib pcm.c:7963:(snd_pcm_recover) underrun occurred
-        mixer.pre_init(44100, -16, 1, 4096)
-        init()
-        self.clock = time.Clock()
-        self.caption = display.set_caption("Space Invaders")
-        self.screen = SCREEN
-        self.background = image.load(IMAGE_PATH + "background.jpg").convert()
-        self.startGame = False
-        self.mainScreen = True
-        self.gameOver = False
-        # Counter for enemy starting position (increased each new round)
-        self.enemyPosition = ENEMY_DEFAULT_POSITION
-        self.titleText = Text(FONT, 50, "Space Invaders", WHITE, 164, 120)
-        self.titleText2 = Text(FONT, 25, "Press any key to continue", WHITE, 201, 205)
-        self.gameOverText = Text(FONT, 50, "Game Over", WHITE, 250, 270)
-        self.nextRoundText = Text(FONT, 50, "Next Round", WHITE, 240, 270)
-        self.enemy1Text = Text(FONT, 25, "   =   10 pts", GREEN, 368, 270)
-        self.enemy2Text = Text(FONT, 25, "   =  20 pts", BLUE, 368, 320)
-        self.enemy3Text = Text(FONT, 25, "   =  30 pts", PURPLE, 368, 370)
-        self.enemy4Text = Text(FONT, 25, "   =  ?????", RED, 368, 420)
-        self.scoreText = Text(FONT, 20, "Score", WHITE, 5, 5)
-        self.livesText = Text(FONT, 20, "Lives ", WHITE, 640, 5)
-        self.creator_name = Text(FONT, 20, "Sandy Inspires", GREEN, 600, 570)
-
-        self.life1 = Life(715, 3)
-        self.life2 = Life(742, 3)
-        self.life3 = Life(769, 3)
-        self.livesGroup = sprite.Group(self.life1, self.life2, self.life3)
-
-    def reset(self, score):
-        self.player = Ship()
-        self.playerGroup = sprite.Group(self.player)
-        self.explosionsGroup = sprite.Group()
-        self.bullets = sprite.Group()
-        self.mysteryShip = Mystery()
-        self.mysteryGroup = sprite.Group(self.mysteryShip)
-        self.enemyBullets = sprite.Group()
-        self.make_enemies()
-        self.allSprites = sprite.Group(
-            self.player, self.enemies, self.livesGroup, self.mysteryShip
-        )
-        self.keys = key.get_pressed()
-
-        self.timer = time.get_ticks()
-        self.noteTimer = time.get_ticks()
-        self.shipTimer = time.get_ticks()
-        self.score = score
-        self.create_audio()
-        self.makeNewShip = False
-        self.shipAlive = True
-
-    def make_blockers(self, number):
-        blockerGroup = sprite.Group()
-        for row in range(4):
-            for column in range(9):
-                blocker = Blocker(10, GREEN, row, column)
-                blocker.rect.x = 50 + (200 * number) + (column * blocker.width)
-                blocker.rect.y = BLOCKERS_POSITION + (row * blocker.height)
-                blockerGroup.add(blocker)
-        return blockerGroup
-
-    def create_audio(self):
-        self.sounds = {}
-        for sound_name in [
-            "shoot",
-            "shoot2",
-            "invaderkilled",
-            "mysterykilled",
-            "shipexplosion",
-        ]:
-            self.sounds[sound_name] = mixer.Sound(
-                SOUND_PATH + "{}.{}".format(sound_name, SOUND_FORMAT)
-            )
-            self.sounds[sound_name].set_volume(0.2)
-
-        self.musicNotes = [
-            mixer.Sound(SOUND_PATH + "{}.{}".format(i, SOUND_FORMAT)) for i in range(4)
-        ]
-        for sound in self.musicNotes:
-            sound.set_volume(0.5)
-
-        self.noteIndex = 0
-
-    def play_main_music(self, currentTime):
-        if currentTime - self.noteTimer > self.enemies.moveTime:
-            self.note = self.musicNotes[self.noteIndex]
-            if self.noteIndex < 3:
-                self.noteIndex += 1
-            else:
-                self.noteIndex = 0
-
-            self.note.play()
-            self.noteTimer += self.enemies.moveTime
-
-    @staticmethod
-    def should_exit(evt):
-        # type: (pygame.event.EventType) -> bool
-        return evt.type == QUIT or (evt.type == KEYUP and evt.key == K_ESCAPE)
-
-    def check_input(self):
-        self.keys = key.get_pressed()
-        for e in event.get():
-            if self.should_exit(e):
+    while True:
+        current_time = pygame.time.get_ticks()
+        elapsed = current_time - level_start_time
+        time_left = max(0, current_level_time - elapsed)
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
                 sys.exit()
-            if e.type == KEYDOWN:
-                if e.key == K_SPACE:
-                    if len(self.bullets) == 0 and self.shipAlive:
-                        if self.score <= 100:
-                            bullet = Bullet(
-                                self.player.rect.x + 23,
-                                self.player.rect.y + 5,
-                                -1,
-                                15,
-                                "laser",
-                                "center",
-                            )
-                            self.bullets.add(bullet)
-                            self.allSprites.add(self.bullets)
-                            self.sounds["shoot"].play()
-                        elif self.score > 100 and self.score <= 200:
-                            leftbullet = Bullet(
-                                self.player.rect.x + 8,
-                                self.player.rect.y + 5,
-                                -1,
-                                15,
-                                "laser",
-                                "left",
-                            )
-                            right_bullet = Bullet(
-                                self.player.rect.x + 38,
-                                self.player.rect.y + 5,
-                                -1,
-                                15,
-                                "laser",
-                                "right",
-                            )
-                            self.bullets.add(leftbullet)
-                            self.bullets.add(right_bullet)
-                            self.allSprites.add(self.bullets)
-                            self.sounds["shoot2"].play()
+            elif event.type == pygame.KEYDOWN:
+                # Activate hint mode by pressing 'h'
+                if event.key == pygame.K_h and not hint_mode:
+                    hint_mode = True
+                    hint_start_time = current_time
+                    hint_last_update = current_time
+                    solution_reached_time = None
+                    # Initialize each solution node to a starting offset: target - 90 degrees.
+                    for (x, y) in solution_path:
+                        board[y][x].orientation = (board[y][x].target - 90) % 360
+            elif event.type == pygame.MOUSEBUTTONDOWN and state == "playing":
+                mx, my = pygame.mouse.get_pos()
+                if mx < game_width:
+                    grid_x = mx // CELL_SIZE
+                    grid_y = (my - top_ui_height) // CELL_SIZE
+                    if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
+                        board[grid_y][grid_x].rotate()
 
+        # Animate hint mode: rotate each solution node until its target orientation is reached.
+        if hint_mode:
+            if current_time - hint_last_update > rotation_interval:
+                for (x, y) in solution_path:
+                    target = board[y][x].target
+                    current_orient = board[y][x].orientation
+                    if current_orient != target:
+                        diff = (target - current_orient) % 360
+                        # If diff is 270°, rotating counter-clockwise is shorter.
+                        if diff == 270:
+                            board[y][x].orientation = (current_orient - 90) % 360
                         else:
-                            left_bullet = Bullet(
-                                self.player.rect.x + 8,
-                                self.player.rect.y + 5,
-                                -1,
-                                15,
-                                "laser",
-                                "left",
-                            )
-                            right_bullet = Bullet(
-                                self.player.rect.x + 38,
-                                self.player.rect.y + 5,
-                                -1,
-                                15,
-                                "laser",
-                                "right",
-                            )
-                            center_bullet = Bullet(
-                                self.player.rect.x + 23,
-                                self.player.rect.y + 5,
-                                -1,
-                                15,
-                                "laser",
-                                "center",
-                            )
-                            self.bullets.add(left_bullet)
-                            self.bullets.add(center_bullet)
-                            self.bullets.add(right_bullet)
-                            self.allSprites.add(self.bullets)
-                            self.sounds["shoot2"].play()
+                            board[y][x].orientation = (current_orient + 90) % 360
+                hint_last_update = current_time
 
-    def make_enemies(self):
-        enemies = EnemiesGroup(10, 5)
-        for row in range(5):
-            for column in range(10):
-                enemy = Enemy(row, column)
-                enemy.rect.x = 157 + (column * 50)
-                enemy.rect.y = self.enemyPosition + (row * 45)
-                enemies.add(enemy)
+            # Confirm all solution nodes are in their target positions.
+            all_correct = all(board[y][x].orientation == board[y][x].target for (x, y) in solution_path)
+            if all_correct and solution_reached_time is None:
+                solution_reached_time = current_time
 
-        self.enemies = enemies
+            # End hint mode when maximum duration is reached or after an extra delay once all nodes match.
+            if (current_time - hint_start_time > HINT_MODE_MAX_DURATION) or \
+               (solution_reached_time is not None and current_time - solution_reached_time > HINT_EXTENSION_DELAY):
+                hint_mode = False
 
-    def make_enemies_shoot(self):
-        if (time.get_ticks() - self.timer) > 700 and self.enemies:
-            enemy = self.enemies.random_bottom()
-            self.enemyBullets.add(
-                Bullet(
-                    enemy.rect.x + 14, enemy.rect.y + 20, 1, 5, "enemylaser", "center"
-                )
-            )
-            self.allSprites.add(self.enemyBullets)
-            self.timer = time.get_ticks()
+        update_terminal_messages()
 
-    def calculate_score(self, row):
-        scores = {0: 30, 1: 20, 2: 20, 3: 10, 4: 10, 5: choice([50, 100, 150, 300])}
-
-        score = scores[row]
-        self.score += score
-        return score
-
-    def create_main_menu(self):
-        self.enemy1 = IMAGES["enemy3_1"]
-        self.enemy1 = transform.scale(self.enemy1, (40, 40))
-        self.enemy2 = IMAGES["enemy2_2"]
-        self.enemy2 = transform.scale(self.enemy2, (40, 40))
-        self.enemy3 = IMAGES["enemy1_2"]
-        self.enemy3 = transform.scale(self.enemy3, (40, 40))
-        self.enemy4 = IMAGES["mystery"]
-        self.enemy4 = transform.scale(self.enemy4, (80, 40))
-        self.screen.blit(self.enemy1, (318, 270))
-        self.screen.blit(self.enemy2, (318, 320))
-        self.screen.blit(self.enemy3, (318, 370))
-        self.screen.blit(self.enemy4, (299, 420))
-
-    def check_collisions(self):
-        sprite.groupcollide(self.bullets, self.enemyBullets, True, True)
-
-        for enemy in sprite.groupcollide(self.enemies, self.bullets, True, True).keys():
-            self.sounds["invaderkilled"].play()
-            self.calculate_score(enemy.row)
-            EnemyExplosion(enemy, self.explosionsGroup)
-            self.gameTimer = time.get_ticks()
-
-        for mystery in sprite.groupcollide(
-            self.mysteryGroup, self.bullets, True, True
-        ).keys():
-            mystery.mysteryEntered.stop()
-            self.sounds["mysterykilled"].play()
-            score = self.calculate_score(mystery.row)
-            MysteryExplosion(mystery, score, self.explosionsGroup)
-            newShip = Mystery()
-            self.allSprites.add(newShip)
-            self.mysteryGroup.add(newShip)
-
-        for player in sprite.groupcollide(
-            self.playerGroup, self.enemyBullets, True, True
-        ).keys():
-            if self.life3.alive():
-                self.life3.kill()
-            elif self.life2.alive():
-                self.life2.kill()
-            elif self.life1.alive():
-                self.life1.kill()
-            else:
-                self.gameOver = True
-                self.startGame = False
-            self.sounds["shipexplosion"].play()
-            ShipExplosion(player, self.explosionsGroup)
-            self.makeNewShip = True
-            self.shipTimer = time.get_ticks()
-            self.shipAlive = False
-
-        if self.enemies.bottom >= 540:
-            sprite.groupcollide(self.enemies, self.playerGroup, True, True)
-            if not self.player.alive() or self.enemies.bottom >= 600:
-                self.gameOver = True
-                self.startGame = False
-
-        sprite.groupcollide(self.bullets, self.allBlockers, True, True)
-        sprite.groupcollide(self.enemyBullets, self.allBlockers, True, True)
-        if self.enemies.bottom >= BLOCKERS_POSITION:
-            sprite.groupcollide(self.enemies, self.allBlockers, False, True)
-
-    def create_new_ship(self, createShip, currentTime):
-        if createShip and (currentTime - self.shipTimer > 900):
-            self.player = Ship()
-            self.allSprites.add(self.player)
-            self.playerGroup.add(self.player)
-            self.makeNewShip = False
-            self.shipAlive = True
-
-    def create_game_over(self, currentTime):
-        self.screen.blit(self.background, (0, 0))
-        passed = currentTime - self.timer
-        if passed < 750:
-            self.gameOverText.draw(self.screen)
-        elif 750 < passed < 1500:
-            self.screen.blit(self.background, (0, 0))
-        elif 1500 < passed < 2250:
-            self.gameOverText.draw(self.screen)
-        elif 2250 < passed < 2750:
-            self.screen.blit(self.background, (0, 0))
-        elif passed > 3000:
-            self.mainScreen = True
-
-        for e in event.get():
-            if self.should_exit(e):
-                sys.exit()
-
-    async def main(self):
-        while True:
-            if self.mainScreen:
-                self.screen.blit(self.background, (0, 0))
-                self.titleText.draw(self.screen)
-                self.titleText2.draw(self.screen)
-                self.enemy1Text.draw(self.screen)
-                self.enemy2Text.draw(self.screen)
-                self.enemy3Text.draw(self.screen)
-                self.enemy4Text.draw(self.screen)
-                self.creator_name.draw(self.screen)
-                self.create_main_menu()
-                for e in event.get():
-                    if self.should_exit(e):
-                        sys.exit()
-                    if e.type == KEYUP:
-                        # Only create blockers on a new game, not a new round
-                        self.allBlockers = sprite.Group(
-                            self.make_blockers(0),
-                            self.make_blockers(1),
-                            self.make_blockers(2),
-                            self.make_blockers(3),
-                        )
-                        self.livesGroup.add(self.life1, self.life2, self.life3)
-                        self.reset(0)
-                        self.startGame = True
-                        self.mainScreen = False
-
-            elif self.startGame:
-                if not self.enemies and not self.explosionsGroup:
-                    currentTime = time.get_ticks()
-                    if currentTime - self.gameTimer < 3000:
-                        self.screen.blit(self.background, (0, 0))
-                        self.scoreText2 = Text(FONT, 20, str(self.score), GREEN, 85, 5)
-                        self.scoreText.draw(self.screen)
-                        self.scoreText2.draw(self.screen)
-                        self.nextRoundText.draw(self.screen)
-                        self.livesText.draw(self.screen)
-                        self.livesGroup.update()
-                        self.check_input()
-                        self.creator_name.draw(self.screen)
-                    if currentTime - self.gameTimer > 3000:
-                        # Move enemies closer to bottom
-                        self.enemyPosition += ENEMY_MOVE_DOWN
-                        self.reset(self.score)
-                        self.gameTimer += 3000
-                else:
-                    currentTime = time.get_ticks()
-                    self.play_main_music(currentTime)
-                    self.screen.blit(self.background, (0, 0))
-                    self.allBlockers.update(self.screen)
-                    self.scoreText2 = Text(FONT, 20, str(self.score), GREEN, 85, 5)
-                    self.scoreText.draw(self.screen)
-                    self.scoreText2.draw(self.screen)
-                    self.livesText.draw(self.screen)
-                    self.check_input()
-                    self.enemies.update(currentTime)
-                    self.allSprites.update(self.keys, currentTime)
-                    self.explosionsGroup.update(currentTime)
-                    self.check_collisions()
-                    self.create_new_ship(self.makeNewShip, currentTime)
-                    self.make_enemies_shoot()
-                    self.creator_name.draw(self.screen)
-
-            elif self.gameOver:
-                currentTime = time.get_ticks()
-                # Reset enemy starting position
-                self.enemyPosition = ENEMY_DEFAULT_POSITION
-                self.create_game_over(currentTime)
-
-            display.update()
-            self.clock.tick(60)
-            await asyncio.sleep(0)
-
+        # Only check for a valid connecting path when hint mode is off.
+        connection_path = None
+        if not hint_mode:
+            connection_path = find_connection_path(board)
+        
+        if state == "playing":
+            if connection_path:
+                bonus = int(time_left / 100)
+                points += bonus + 100
+                state = "hacked"
+                level_complete_start = current_time
+                # Uncomment to play success sound:
+                # success_sound.play()
+            elif time_left <= 0:
+                state = "timeout"
+                timeout_start = current_time
+        elif state == "hacked":
+            if current_time - level_complete_start > LEVEL_COMPLETE_DELAY:
+                level += 1
+                grid_size = get_grid_size_for_level(level)
+                current_level_time = get_level_time(level)
+                board, solution_path = create_board(grid_size)
+                # Occasionally auto-solve new puzzle at start.
+                if random.random() < AUTO_SOLVED_CHANCE:
+                    for (x, y) in solution_path:
+                        board[y][x].orientation = board[y][x].target
+                top_ui_height = SMALL_UI_BAR_HEIGHT if grid_size < 5 else LARGE_UI_BAR_HEIGHT
+                game_width = grid_size * CELL_SIZE
+                screen_width = game_width + SIDEBAR_WIDTH
+                screen_height = grid_size * CELL_SIZE + top_ui_height
+                screen = pygame.display.set_mode((screen_width, screen_height))
+                level_start_time = current_time
+                state = "playing"
+        elif state == "timeout":
+            if current_time - timeout_start > LEVEL_COMPLETE_DELAY:
+                board, solution_path = create_board(grid_size)
+                # Occasionally auto-solve puzzle at start.
+                if random.random() < AUTO_SOLVED_CHANCE:
+                    for (x, y) in solution_path:
+                        board[y][x].orientation = board[y][x].target
+                level_start_time = current_time
+                current_level_time = get_level_time(level)
+                state = "playing"
+        
+        # Draw game area.
+        game_area = pygame.Rect(0, 0, game_width, screen_height)
+        pygame.draw.rect(screen, GRID_BG_COLOR, game_area)
+        for y in range(grid_size):
+            for x in range(grid_size):
+                draw_cell(screen, board[y][x], x, y, top_ui_height)
+        
+        # Draw hint path or valid connection path.
+        if hint_mode:
+            for (x, y) in solution_path:
+                draw_highlighted_lines(screen, board[y][x], x, y, top_ui_height, HINT_HIGHLIGHT_COLOR)
+        elif connection_path:
+            for (x, y) in connection_path:
+                draw_highlighted_lines(screen, board[y][x], x, y, top_ui_height, HIGHLIGHT_COLOR)
+        
+        # Always draw endpoint boxes.
+        entrance_box_color = HINT_HIGHLIGHT_COLOR if (hint_mode or connection_path) else ENTRANCE_NODE_COLOR
+        exit_box_color = HINT_HIGHLIGHT_COLOR if (hint_mode or connection_path) else EXIT_NODE_COLOR
+        draw_endpoint_box(screen, 0, 0, top_ui_height, entrance_box_color)
+        draw_endpoint_box(screen, grid_size - 1, grid_size - 1, top_ui_height, exit_box_color)
+        
+        # Draw UI bar and terminal sidebar.
+        if grid_size < 5:
+            draw_ui_double_bar(screen, level, points, time_left, game_width, top_ui_height)
+        else:
+            draw_ui_bar(screen, level, points, time_left, game_width, top_ui_height)
+            draw_glitch_effect(screen, game_width, top_ui_height)
+        
+        sidebar_rect = pygame.Rect(game_width, 0, SIDEBAR_WIDTH, screen_height)
+        draw_terminal_sidebar(screen, sidebar_rect)
+        
+        # Draw pop-up notification for hack success or timeout in a retro old computer style.
+        if state == "hacked":
+            draw_popup_notification(screen, "Network Breached!\nAccess Granted.", game_width, screen_height)
+        elif state == "timeout":
+            draw_popup_notification(screen, "Access Denied!\nSystem Rebooting...", game_width, screen_height)
+        
+        pygame.display.flip()
+        clock.tick(30)
 
 if __name__ == "__main__":
-    game = SpaceInvaders()
-    asyncio.run(game.main())
+    main()
