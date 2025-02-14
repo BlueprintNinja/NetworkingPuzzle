@@ -18,7 +18,7 @@ class Ship(sprite.Sprite):
             self.rect.x += self.speed
         self.game.blit(self.image, self.rect)
 
-
+ 
 class Bullet(sprite.Sprite):
     def __init__(self, game, xpos, ypos, direction, speed, filename, side):
         sprite.Sprite.__init__(self)
